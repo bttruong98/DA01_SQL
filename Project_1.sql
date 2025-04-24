@@ -1,4 +1,4 @@
--- Change datatype of all the columns
+-- Change the datatype of all the columns
 ALTER TABLE SALES_DATASET_RFM_PRJ
 ALTER Column ordernumber TYPE BIGINT USING ordernumber::BIGINT,
 ALTER Column quantityordered TYPE INT USING quantityordered::INT,
@@ -32,18 +32,23 @@ OR orderlinenumber IS NULL
 OR sales IS NULL
 OR orderdate IS NULL
 
--- Add column contactlastname, contactfirstname which was splitted from contactfullname
+-- Add column contactlastname, contactfirstname, which are split from contactfullname
 -- Capitalize first name and last name
 ALTER TABLE SALES_DATASET_RFM_PRJ
 ADD column contactfirstname VARCHAR(50),
 ADD column contactlastname VARCHAR(50)
 
 UPDATE SALES_DATASET_RFM_PRJ
-SET contactfirstname = CONCAT(UPPER(LEFT(contactfullname,1)),
-							   RIGHT(LEFT(contactfullname, POSITION('-' IN contactfullname)-1),
-									 LENGTH(LEFT(contactfullname, POSITION('-' IN contactfullname)-1))-1)),
-	 contactlastname = CONCAT(UPPER(LEFT(RIGHT(contactfullname, 1 - (POSITION('-' IN contactfullname)+1)),1)),
-							  SUBSTRING(contactfullname FROM POSITION('-' IN contactfullname)+2));
+SET contactfirstname = CONCAT
+			(
+			UPPER(LEFT(contactfullname,1)),RIGHT(LEFT(contactfullname, POSITION('-' IN contactfullname)-1),
+			LENGTH(LEFT(contactfullname, POSITION('-' IN contactfullname)-1))-1)
+			),
+    contactlastname =  CONCAT
+			(
+			UPPER(LEFT(RIGHT(contactfullname, 1 - (POSITION('-' IN contactfullname)+1)),1)),
+			SUBSTRING(contactfullname FROM POSITION('-' IN contactfullname)+2)
+			);
 
 SELECT * FROM SALES_DATASET_RFM_PRJ
 
@@ -71,22 +76,22 @@ FROM SALES_DATASET_RFM_PRJ;
                      (SELECT STDDEV(quantityordered) FROM SALES_DATASET_RFM_PRJ) AS stddev
                 FROM SALES_DATASET_RFM_PRJ),
 twt_outlier AS (
-				SELECT *, (quantityordered-avg)/stddev AS z_score
-				FROM cte
-				WHERE abs((quantityordered-avg)/stddev) > 3
-				) */
+		SELECT *, (quantityordered-avg)/stddev AS z_score
+		FROM cte
+		WHERE abs((quantityordered-avg)/stddev) > 3
+		) */
 			
 WITH bounds AS
 (SELECT Q1,
-		Q3,
-		IQR,
-		Q1 - 1.5*IQR AS min_value,
-	    Q3 + 1.5*IQR AS max_value
+	Q3,
+	IQR,
+	Q1 - 1.5*IQR AS min_value,
+    	Q3 + 1.5*IQR AS max_value
 FROM (SELECT		
 	  PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY quantityordered) AS Q1,
 	  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY quantityordered) AS Q3,
 	  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY quantityordered) - PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY quantityordered) AS IQR
-	  FROM SALES_DATASET_RFM_PRJ))
+	FROM SALES_DATASET_RFM_PRJ))
 SELECT * FROM SALES_DATASET_RFM_PRJ
 WHERE quantityordered < (SELECT min_value FROM bounds)
 OR quantityordered > (SELECT max_value FROM bounds)
@@ -94,12 +99,12 @@ OR quantityordered > (SELECT max_value FROM bounds)
 -- Replace outliers with average order quantity (Not run yet)
 UPDATE SALES_DATASET_RFM_PRJ
 SET quantityordered = (SELECT AVG(quantityordered)
-FROM SALES_DATASET_RFM_PRJ)
+			FROM SALES_DATASET_RFM_PRJ)
 WHERE quantityordered IN (SELECT quantityordered FROM twt_outlier)
 
 SELECT * FROM SALES_DATASET_RFM_PRJ;
 
--- Save into new table
+-- Save into a new table
 SELECT * INTO sales_dataset_rfm_prj_clean
 FROM SALES_DATASET_RFM_PRJ;
 
