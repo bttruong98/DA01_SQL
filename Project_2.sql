@@ -56,37 +56,41 @@ BEGIN
 END;
 
 -- Top 5 san pham moi thang
-WITH profit_products AS
-(SELECT FORMAT_DATE('%Y-%m', DATE(created_at)) AS month_year, 
-        product_id,
-        product_name,
-        ROUND(product_retail_price,2) AS sales,
-        ROUND(cost,2) AS cost,
-        ROUND((product_retail_price - cost),2) AS profits,
-        DENSE_RANK () OVER (PARTITION BY FORMAT_DATE('%Y-%m', DATE(created_at)) 
-                            ORDER BY ROUND((product_retail_price - cost),2) DESC, FORMAT_DATE('%Y-%m', DATE(created_at))) 
+WITH profit_items AS
+(SELECT FORMAT_DATE('%Y-%m', DATE(a.created_at)) AS month_year,
+        a.product_id,
+        b.name AS product_name,
+        ROUND(a.sale_price,2) AS sales,
+        ROUND(b.cost,2) AS cost,
+        ROUND((a.sale_price - b.cost),2) AS profits,
+        DENSE_RANK () OVER (PARTITION BY FORMAT_DATE('%Y-%m', DATE(a.created_at)) 
+                            ORDER BY ROUND((a.sale_price - b.cost),2) DESC, FORMAT_DATE('%Y-%m', DATE(a.created_at))) 
                             AS rank_per_month
-  FROM bigquery-public-data.thelook_ecommerce.inventory_items
+FROM bigquery-public-data.thelook_ecommerce.order_items a
+JOIN bigquery-public-data.thelook_ecommerce.products b
+ON a.product_id = b.id
 WHERE FORMAT_DATE('%Y-%m', DATE(created_at)) <= '2022-04')
-
 SELECT month_year, product_id, product_name, sales, cost, profits, rank_per_month
-FROM profit_products
+FROM profit_items
 WHERE rank_per_month <= 5;
 
 -- Doanh thu tinh den thoi diem hien tai tren moi danh muc
-SELECT DATE(created_at) AS dates, product_category, ROUND(SUM(product_retail_price),2) AS revenue
-FROM bigquery-public-data.thelook_ecommerce.inventory_items
-WHERE DATE(created_at) BETWEEN DATE_SUB('2022-04-15', INTERVAL 3 MONTH) AND DATE('2022-04-15')
+SELECT DATE(a.created_at) AS dates, b.category AS product_category, ROUND(SUM(a.sale_price),2) AS revenue
+FROM bigquery-public-data.thelook_ecommerce.order_items a
+LEFT JOIN bigquery-public-data.thelook_ecommerce.products b
+ON a.product_id = b.id
+WHERE DATE(a.created_at) BETWEEN DATE_SUB('2022-04-15', INTERVAL 3 MONTH) AND DATE('2022-04-15')
 GROUP BY product_category, dates
-ORDER BY dates DESC;
+ORDER BY dates DESC, revenue DESC;
 
 -- Tao dataset de dung dashboard
+CREATE OR REPLACE VIEW `bigquery-public-data.thelook_ecommerce.vw_ecommerce_analyst` AS
 WITH key_elements AS
 (SELECT FORMAT_DATE('%Y-%m', DATE(oi.created_at)) AS month, 
         EXTRACT(year FROM oi.created_at) AS year, 
         p.category AS product_category, 
         ROUND(SUM(oi.sale_price),2) AS TPV,
-        COUNT(DISTINCT oi.order_id) AS TPO,
+        COUNT(*) AS TPO,
         ROUND(SUM(p.cost),2) AS total_cost,
         ROUND(SUM(oi.sale_price - p.cost),2) AS total_profit,
         ROUND(SUM(oi.sale_price - p.cost)/SUM(p.cost),2) AS profit_to_cost_ratio
@@ -95,7 +99,6 @@ JOIN bigquery-public-data.thelook_ecommerce.orders o
 ON oi.order_id = o.order_id
 JOIN bigquery-public-data.thelook_ecommerce.products p
 ON oi.product_id = p.id
-WHERE oi.status = 'Complete'
 GROUP BY FORMAT_DATE('%Y-%m', DATE(oi.created_at)), 
          EXTRACT(year FROM oi.created_at), 
          p.category
@@ -103,14 +106,43 @@ ORDER BY month, year, TPV DESC)
 SELECT month,
         year,
         product_category,
-        TPV,
-        LAG(TPV) OVER(PARTITION BY product_category ORDER BY month) AS TPV_last_month,
-        (TPV - LAG(TPV) OVER(PARTITION BY product_category ORDER BY month))*100/NULLIF(LAG(TPV) OVER(PARTITION BY product_category ORDER BY month),0) AS revenue_growth,
-        TPO,
-        LAG(TPO) OVER(PARTITION BY product_category ORDER BY month) AS TPO_last_month,
-        (TPO - LAG(TPO) OVER(PARTITION BY product_category ORDER BY month))*100/NULLIF(LAG(TPO) OVER(PARTITION BY product_category ORDER BY month),0) AS order_growth,
+        TPV, TPO,
+        ROUND((TPV - LAG(TPV) OVER(PARTITION BY product_category ORDER BY month))*100
+              /NULLIF(LAG(TPV) OVER(PARTITION BY product_category ORDER BY month),0),2)||'%' AS revenue_growth,
+        ROUND((TPO - LAG(TPO) OVER(PARTITION BY product_category ORDER BY month))*100
+              /NULLIF(LAG(TPO) OVER(PARTITION BY product_category ORDER BY month),0),2)||'%' AS order_growth,
         total_cost,
         total_profit,
         profit_to_cost_ratio
 FROM key_elements
 ORDER BY month;
+
+-- Cohort Analysis
+WITH ecommerce_main AS(SELECT *
+                       FROM (SELECT id, user_id, order_id, product_id, created_at AS purchase_dates, 
+                                    ROUND(sale_price,2) AS amount,
+                                    ROW_NUMBER() OVER(PARTITION BY id, user_id, order_id, product_id
+                                                ORDER BY created_at) AS dub_flag
+                             FROM bigquery-public-data.thelook_ecommerce.order_items)
+                       WHERE dub_flag = 1
+                       ORDER BY purchase_dates),
+ecommerce_index AS (SELECT user_id, 
+                              amount,
+                              FORMAT_DATE('%Y-%m-01', DATE(first_purchase_dates)) AS cohort_date,
+                              purchase_dates,
+                              (EXTRACT(year FROM purchase_dates) - EXTRACT(year FROM first_purchase_dates))*12 
+                              + (EXTRACT(month FROM purchase_dates) - EXTRACT(month FROM first_purchase_dates)) AS index
+                    FROM (SELECT user_id,
+                                  amount,
+                                  MIN(purchase_dates) OVER(PARTITION BY user_id) AS first_purchase_dates,
+                                  purchase_dates
+                          FROM ecommerce_main
+                          ORDER BY purchase_dates))
+SELECT cohort_date,
+        index,
+        COUNT(DISTINCT user_id) AS user_cnt,
+        ROUND(SUM(amount),2) AS revenue
+FROM ecommerce_index
+WHERE index <= 3 
+GROUP BY cohort_date, index
+ORDER BY cohort_date;
