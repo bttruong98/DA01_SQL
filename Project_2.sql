@@ -127,11 +127,11 @@ WITH ecommerce_main AS(SELECT *
                        WHERE dub_flag = 1
                        ORDER BY purchase_dates),
 ecommerce_index AS (SELECT user_id, 
-                              amount,
-                              FORMAT_DATE('%Y-%m-01', DATE(first_purchase_dates)) AS cohort_date,
-                              purchase_dates,
-                              (EXTRACT(year FROM purchase_dates) - EXTRACT(year FROM first_purchase_dates))*12 
-                              + (EXTRACT(month FROM purchase_dates) - EXTRACT(month FROM first_purchase_dates)) AS index
+                            amount,
+                            FORMAT_DATE('%Y-%m-01', DATE(first_purchase_dates)) AS cohort_date,
+                            purchase_dates,
+                            (EXTRACT(year FROM purchase_dates) - EXTRACT(year FROM first_purchase_dates))*12 
+                            + (EXTRACT(month FROM purchase_dates) - EXTRACT(month FROM first_purchase_dates)) AS index
                     FROM (SELECT user_id,
                                   amount,
                                   MIN(purchase_dates) OVER(PARTITION BY user_id) AS first_purchase_dates,
